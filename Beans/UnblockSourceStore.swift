@@ -1,7 +1,7 @@
 import Foundation
 
 /// 内置第三方解锁源。
-/// kind：paid-lx、paid-cr、paid-qt 分别对应三种插件运行时格式。
+/// kind：用于在设置界面标识预设类型。
 /// template：请求 URL 模板，支持 {id}、{source}、{quality} 占位符。
 /// headers：可选的请求头与内置元数据。
 struct ThirdPartySource: Identifiable, Codable, Hashable, Sendable {
@@ -51,39 +51,22 @@ struct ThirdPartySource: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-/// 内置音源管理：首次启动时写入三种插件格式对应的预设。
+/// 内置音源管理：首次启动时写入可直接调用的公益音源预设。
 final class UnblockSourceStore: ObservableObject {
     static let shared = UnblockSourceStore()
 
-    private static let paidAPIURL = "https://source.shiqianjiang.cn/api/music"
-    private static let paidAPIKey = "CERU_KEY-51440644-C9AD-4E10-B593-258FF59CF259"
-    private static let paidURLTemplate = "\(paidAPIURL)/url?source={source}&songId={id}&quality={quality}"
+    private static let publicAPIURL = "https://source.shiqianjiang.cn/api/music"
+    private static let publicURLTemplate = "\(publicAPIURL)/url?source={source}&songId={id}&quality={quality}"
 
-    /// 来自用户提供的三个脚本：LX、CeruMusic CR、CeruMusic QT。
-    /// 三个脚本最终调用同一个 API，播放时会按请求指纹去重，避免同一首歌重复请求三次。
-    static let paidPresetSources: [ThirdPartySource] = [
+    /// 与 KMusic-2026 的“新澜音源”一致的公开 HTTPS 接口。
+    /// Beans 仅调用与自身歌曲模型匹配的平台（网易云、QQ、酷狗），且不随应用携带 API 密钥。
+    static let publicPresetSources: [ThirdPartySource] = [
         ThirdPartySource(
-            id: "beans.preset.shiqianjiang.lx.v7",
-            name: "聆澜音源 · LX",
-            kind: "paid-lx",
-            template: paidURLTemplate,
-            headers: ["apiKey": paidAPIKey, "quality": "320k"],
-            isPreset: true
-        ),
-        ThirdPartySource(
-            id: "beans.preset.shiqianjiang.cr.v7",
-            name: "聆澜音源 · CR",
-            kind: "paid-cr",
-            template: paidURLTemplate,
-            headers: ["apiKey": paidAPIKey, "quality": "320k"],
-            isPreset: true
-        ),
-        ThirdPartySource(
-            id: "beans.preset.shiqianjiang.qt.v7",
-            name: "聆澜音源 · QT",
-            kind: "paid-qt",
-            template: paidURLTemplate,
-            headers: ["apiKey": paidAPIKey, "quality": "320k"],
+            id: "beans.preset.xinlan.public.v1",
+            name: "新澜公益音源",
+            kind: "public-lx",
+            template: publicURLTemplate,
+            headers: ["quality": "320k"],
             isPreset: true
         ),
     ]
@@ -109,9 +92,11 @@ final class UnblockSourceStore: ObservableObject {
             savedSources = []
         }
 
-        // 旧版本的导入源和旧版 guoyue 预设不再参与播放，避免导入脚本继续触发网络请求。
-        let existingPresets = savedSources.filter { $0.isPreset }
-        presetSources = Self.seedPaidPresets(into: existingPresets)
+        // 迁移时移除旧版带密钥的预设，但保留用户自行添加的自定义项。
+        let existingSources = savedSources.filter { source in
+            !source.isPreset || publicPresetSources.contains(where: { $0.id == source.id })
+        }
+        presetSources = Self.seedPublicPresets(into: existingSources)
         defaults.removeObject(forKey: legacyCustomKey)
         defaults.removeObject(forKey: legacyLXKey)
         save()
@@ -123,9 +108,9 @@ final class UnblockSourceStore: ObservableObject {
         }
     }
 
-    private static func seedPaidPresets(into savedSources: [ThirdPartySource]) -> [ThirdPartySource] {
+    private static func seedPublicPresets(into savedSources: [ThirdPartySource]) -> [ThirdPartySource] {
         var seeded = savedSources
-        for preset in paidPresetSources {
+        for preset in publicPresetSources {
             if let index = seeded.firstIndex(where: { $0.id == preset.id }) {
                 var updated = preset
                 updated.enabled = seeded[index].enabled
