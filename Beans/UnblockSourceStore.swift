@@ -55,6 +55,35 @@ struct ThirdPartySource: Identifiable, Codable, Hashable, Sendable {
 final class UnblockSourceStore: ObservableObject {
     static let shared = UnblockSourceStore()
 
+    enum CustomSourceValidationError: LocalizedError {
+        case invalidName
+        case invalidTemplate
+        case insecureTemplate
+        case missingSongIdentifier
+        case invalidResponsePath
+        case duplicate
+        case limitReached
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidName:
+                return "请填写不超过 40 个字符的音源名称。"
+            case .invalidTemplate:
+                return "接口模板必须是有效的网址。"
+            case .insecureTemplate:
+                return "为保护隐私，仅支持 HTTPS 接口地址。"
+            case .missingSongIdentifier:
+                return "接口模板需至少包含 {id}、{name} 或 {keyword} 之一。"
+            case .invalidResponsePath:
+                return "返回字段路径只能使用字母、数字、点、下划线、横线和 |。"
+            case .duplicate:
+                return "相同的自定义音源已经存在。"
+            case .limitReached:
+                return "最多可保存 20 个自定义音源。"
+            }
+        }
+    }
+
     private static let publicAPIURL = "https://source.shiqianjiang.cn/api/music"
     private static let publicURLTemplate = "\(publicAPIURL)/url?source={source}&songId={id}&quality={quality}"
 
@@ -73,6 +102,14 @@ final class UnblockSourceStore: ObservableObject {
 
     @Published var presetSources: [ThirdPartySource] {
         didSet { save() }
+    }
+
+    var builtInSources: [ThirdPartySource] {
+        presetSources.filter(\.isPreset)
+    }
+
+    var customSources: [ThirdPartySource] {
+        presetSources.filter { !$0.isPreset }
     }
 
     private let defaults = UserDefaults.standard
@@ -120,5 +157,78 @@ final class UnblockSourceStore: ObservableObject {
             }
         }
         return seeded
+    }
+
+    func addCustomSource(
+        name: String,
+        template: String,
+        urlPath: String,
+        provider: String,
+        quality: String = "320k"
+    ) throws {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedTemplate = template.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPath = urlPath.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !normalizedName.isEmpty, normalizedName.count <= 40 else {
+            throw CustomSourceValidationError.invalidName
+        }
+        guard normalizedTemplate.count <= 2_048 else {
+            throw CustomSourceValidationError.invalidTemplate
+        }
+        guard ["{id}", "{name}", "{keyword}"].contains(where: { normalizedTemplate.contains($0) }) else {
+            throw CustomSourceValidationError.missingSongIdentifier
+        }
+
+        let sampleTemplate = normalizedTemplate
+            .replacingOccurrences(of: "{id}", with: "1")
+            .replacingOccurrences(of: "{source}", with: "wy")
+            .replacingOccurrences(of: "{quality}", with: "320k")
+            .replacingOccurrences(of: "{name}", with: "song")
+            .replacingOccurrences(of: "{keyword}", with: "song")
+            .replacingOccurrences(of: "{artist}", with: "artist")
+        guard let components = URLComponents(string: sampleTemplate),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host,
+              !host.isEmpty else {
+            throw CustomSourceValidationError.invalidTemplate
+        }
+        guard scheme == "https" else {
+            throw CustomSourceValidationError.insecureTemplate
+        }
+
+        let allowedPathCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._|-"))
+        guard !normalizedPath.isEmpty,
+              normalizedPath.unicodeScalars.allSatisfy({ allowedPathCharacters.contains($0) }) else {
+            throw CustomSourceValidationError.invalidResponsePath
+        }
+        guard customSources.count < 20 else {
+            throw CustomSourceValidationError.limitReached
+        }
+        guard !customSources.contains(where: {
+            $0.template == normalizedTemplate && $0.urlPath == normalizedPath
+        }) else {
+            throw CustomSourceValidationError.duplicate
+        }
+
+        var headers = ["quality": quality]
+        if provider != "all" {
+            headers["source"] = provider
+        }
+        presetSources.append(
+            ThirdPartySource(
+                name: normalizedName,
+                kind: "custom",
+                template: normalizedTemplate,
+                urlPath: normalizedPath,
+                headers: headers,
+                isPreset: false
+            )
+        )
+    }
+
+    func removeCustomSource(id: String) {
+        guard let index = presetSources.firstIndex(where: { $0.id == id && !$0.isPreset }) else { return }
+        presetSources.remove(at: index)
     }
 }
