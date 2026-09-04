@@ -1022,13 +1022,14 @@ struct SettingsView: View {
     /// 日志
     @State private var showLogViewer = false
     @State private var showUsageGuide = false
+    @State private var showCustomSourceEditor = false
 
     private var themeMode: BeansThemeMode {
         BeansThemeMode(rawValue: themeModeRaw) ?? .system
     }
 
     private var presetSourceCount: Int {
-        sourceStore.presetSources.count
+        sourceStore.builtInSources.count
     }
 
     var body: some View {
@@ -1078,6 +1079,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showUsageGuide) {
             UsageGuideSheet()
+        }
+        .sheet(isPresented: $showCustomSourceEditor) {
+            CustomSourceEditorSheet(sourceStore: sourceStore)
         }
         .fileExporter(
             isPresented: $showExportBackup,
@@ -1714,7 +1718,7 @@ struct SettingsView: View {
                         .foregroundStyle(Color.beansComment)
                 }
 
-                ForEach(sourceStore.presetSources) { source in
+                ForEach(sourceStore.builtInSources) { source in
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(source.name)
@@ -1729,6 +1733,69 @@ struct SettingsView: View {
                         Toggle("", isOn: sourceEnabledBinding(source.id))
                             .labelsHidden()
                             .tint(Color.beansAmber)
+                    }
+                }
+
+                Divider().overlay(Color.beansComment.opacity(0.15))
+
+                HStack(spacing: 10) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.beansAmber)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("自定义 HTTPS 音源")
+                            .font(BeansFont.appFont(13, .semibold))
+                            .foregroundStyle(Color.beansLabel)
+                        Text("仅添加你信任的接口；不支持 JS 脚本")
+                            .font(BeansFont.appFont(10))
+                            .foregroundStyle(Color.beansComment)
+                    }
+                    Spacer()
+                    Button {
+                        BeansHaptics.tap()
+                        showCustomSourceEditor = true
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(Color.beansAmber)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("添加自定义音源")
+                }
+
+                if sourceStore.customSources.isEmpty {
+                    Text("还没有自定义音源")
+                        .font(BeansFont.appFont(11))
+                        .foregroundStyle(Color.beansComment)
+                } else {
+                    ForEach(sourceStore.customSources) { source in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(source.name)
+                                    .font(BeansFont.appFont(13, .medium))
+                                    .foregroundStyle(Color.beansLabel)
+                                    .lineLimit(1)
+                                Text(source.template)
+                                    .font(BeansFont.appFont(10))
+                                    .foregroundStyle(Color.beansComment)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Toggle("", isOn: sourceEnabledBinding(source.id))
+                                .labelsHidden()
+                                .tint(Color.beansAmber)
+                            Button(role: .destructive) {
+                                BeansHaptics.medium()
+                                sourceStore.removeCustomSource(id: source.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Color.red.opacity(0.85))
+                                    .frame(width: 28, height: 28)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("删除 \(source.name)")
+                        }
                     }
                 }
 
@@ -2264,6 +2331,142 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
             .zIndex(2)
+        }
+    }
+}
+
+// MARK: - 自定义 HTTPS 音源
+
+private struct CustomSourceEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var sourceStore: UnblockSourceStore
+
+    @State private var name = ""
+    @State private var template = ""
+    @State private var urlPath = "url"
+    @State private var provider = "all"
+    @State private var quality = "320k"
+    @State private var errorMessage: String?
+
+    private let providers = [
+        (id: "all", name: "全部平台"),
+        (id: "wy", name: "仅网易云"),
+        (id: "tx", name: "仅 QQ 音乐"),
+        (id: "kg", name: "仅酷狗音乐"),
+    ]
+    private let qualities = ["128k", "320k", "flac"]
+
+    var body: some View {
+        BeansNavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("添加可信 HTTPS 音源")
+                        .font(BeansFont.appFont(20, .bold))
+                        .foregroundStyle(Color.beansLabel)
+
+                    Text("音源仅会在官方播放地址不可用时请求。请只填写你信任且有权使用的接口；本应用不会运行 JS 脚本。")
+                        .font(BeansFont.appFont(12))
+                        .foregroundStyle(Color.beansComment)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    field(title: "音源名称") {
+                        TextField("例如：我的备用音源", text: $name)
+                            .textInputAutocapitalization(.never)
+                    }
+
+                    field(title: "HTTPS 接口模板") {
+                        TextField("https://example.com/url?id={id}&source={source}", text: $template, axis: .vertical)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .lineLimit(2...4)
+                    }
+
+                    Text("支持 {id}、{source}、{quality}、{name}、{artist}、{keyword}。模板至少要有 {id}、{name} 或 {keyword}。")
+                        .font(BeansFont.appFont(11))
+                        .foregroundStyle(Color.beansComment)
+
+                    field(title: "播放链接字段路径") {
+                        TextField("url 或 data.url|url", text: $urlPath)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+
+                    Text("接口返回 JSON 时，填写播放链接所在字段；可用 | 依次尝试多个路径。")
+                        .font(BeansFont.appFont(11))
+                        .foregroundStyle(Color.beansComment)
+
+                    field(title: "适用平台") {
+                        Picker("适用平台", selection: $provider) {
+                            ForEach(providers, id: \.id) { option in
+                                Text(option.name).tag(option.id)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    field(title: "回退音质") {
+                        Picker("回退音质", selection: $quality) {
+                            ForEach(qualities, id: \.self) { value in
+                                Text(value).tag(value)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+                .padding(20)
+            }
+            .navigationTitle("自定义音源")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("添加") { addSource() }
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .alert("无法添加音源", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("知道了", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private func field<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(BeansFont.appFont(13, .semibold))
+                .foregroundStyle(Color.beansLabel)
+            content()
+                .font(BeansFont.appFont(14))
+                .foregroundStyle(Color.beansLabel)
+                .padding(12)
+                .background {
+                    BeansGlass(shape: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+        }
+    }
+
+    private func addSource() {
+        do {
+            try sourceStore.addCustomSource(
+                name: name,
+                template: template,
+                urlPath: urlPath,
+                provider: provider,
+                quality: quality
+            )
+            BeansHaptics.success()
+            ToastCenter.shared.show("自定义音源已添加")
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }
