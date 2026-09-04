@@ -2375,7 +2375,7 @@ private struct CustomSourceEditorSheet: View {
                     }
 
                     field(title: "HTTPS 接口模板") {
-                        TextField("https://example.com/url?id={id}&source={source}", text: $template, axis: .vertical)
+                        TextField("https://example.com/url?id={id}&source={source}", text: $template)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .lineLimit(2...4)
